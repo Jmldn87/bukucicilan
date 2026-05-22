@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buku Cicilan Jamaludin</title>
+    <!-- Menggunakan Tailwind CSS via CDN untuk styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Sembunyikan scrollbar untuk tampilan yang lebih bersih di mobile */
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+        body {
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 selection:bg-indigo-100">
+    <!-- Kontainer Utama Aplikasi -->
+    <div id="app" class="max-w-md mx-auto bg-slate-50 min-h-screen shadow-2xl overflow-hidden relative border-x border-slate-100">
+        <!-- Tampilan akan di-render di dalam sini oleh JavaScript -->
+    </div>
+
+    <!-- MENGGUNAKAN MODULE UNTUK FIREBASE DATABASE -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Data Awal (Fallback jika Database Kosong) ---
+        const initialData = [
+            {
+                id: '1',
+                itemName: 'Cicilan Kulkas',
+                personName: 'Ang Yun',
+                userPin: '1111',
+                amount: 290000,
+                totalMonths: 6,
+                installments: [
+                    { id: '1-1', monthName: 'Desember 2025', isPaid: true, date: '2025-12-20' },
+                    { id: '1-2', monthName: 'Januari 2026', isPaid: true, date: '2026-01-20' },
+                    { id: '1-3', monthName: 'Februari 2026', isPaid: true, date: '2026-02-27' },
+                    { id: '1-4', monthName: 'Maret 2026', isPaid: true, date: '2026-04-05' },
+                    { id: '1-5', monthName: 'April 2026', isPaid: true, date: '2026-04-30' },
+                    { id: '1-6', monthName: 'Mei 2026', isPaid: false, date: '' },
+                ]
+            },
+            {
+                id: '2',
+                itemName: 'Cicilan HP',
+                personName: 'Ang Ibnu',
+                userPin: '2222',
+                amount: 240000,
+                totalMonths: 10,
+                installments: [
+                    { id: '2-1', monthName: 'November 2025', isPaid: true, date: '2025-11-25' },
+                    { id: '2-2', monthName: 'Desember 2025', isPaid: true, date: '2025-12-25' },
+                    { id: '2-3', monthName: 'Januari 2026', isPaid: true, date: '2026-01-28' },
+                    { id: '2-4', monthName: 'Februari 2026', isPaid: true, date: '2026-03-02' },
+                    { id: '2-5', monthName: 'Maret 2026', isPaid: true, date: '2026-04-07' },
+                    { id: '2-6', monthName: 'April 2026', isPaid: false, date: '' },
+                    { id: '2-7', monthName: 'Mei 2026', isPaid: false, date: '' },
+                    { id: '2-8', monthName: 'Juni 2026', isPaid: false, date: '' },
+                    { id: '2-9', monthName: 'Juli 2026', isPaid: false, date: '' },
+                    { id: '2-10', monthName: 'Agustus 2026', isPaid: false, date: '' },
+                ]
+            }
+        ];
+
+        // --- State Manajemen Utama ---
+        const state = {
+            view: 'login',
+            role: null,
+            currentUser: null,
+            selectedId: null,
+            credits: [],
+            isDBLoaded: false
+        };
+
+        // =========================================================================
+        // PENGATURAN DATABASE FIREBASE
+        // =========================================================================
+        
+        // Cek apakah sedang dijalankan di environment otomatis (saat ini) atau di Vercel (Hosting Mandiri)
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                // JIKA HOSTING DI VERCEL: GANTI TEKS DI BAWAH INI DENGAN CONFIG FIREBASE ANDA SENDIRI
+                apiKey: "ISI_API_KEY_ANDA",
+                authDomain: "ISI_AUTH_DOMAIN_ANDA",
+                projectId: "ISI_PROJECT_ID_ANDA",
+                storageBucket: "ISI_STORAGE_BUCKET_ANDA",
+                messagingSenderId: "ISI_SENDER_ID_ANDA",
+                appId: "ISI_APP_ID_ANDA"
+            };
+
+        const hasValidConfig = typeof __firebase_config !== 'undefined' || firebaseConfig.apiKey !== "ISI_API_KEY_ANDA";
+        window.db = null; // Menyimpan referensi database jika berhasil konek
+
+        if (hasValidConfig) {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            window.db = getFirestore(app);
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'buku-cicilan-jamaludin';
+            
+            window._getDocRef = (id) => doc(window.db, 'artifacts', appId, 'public', 'data', 'credits', id);
+            let unsubscribeSnapshot = null;
+
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (e) {
+                    console.error("Auth Error:", e);
+                    fallbackToLocal();
+                }
+            };
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    subscribeToData();
+                } else {
+                    if (unsubscribeSnapshot) unsubscribeSnapshot();
+                }
+            });
+
+            const subscribeToData = () => {
+                const creditsRef = collection(window.db, 'artifacts', appId, 'public', 'data', 'credits');
+                unsubscribeSnapshot = onSnapshot(creditsRef, (snapshot) => {
+                    const fetchedData = [];
+                    snapshot.forEach(d => fetchedData.push(d.data()));
+
+                    // Inisialisasi awal jika database kosong saat uji coba
+                    if (fetchedData.length === 0 && typeof __firebase_config !== 'undefined') {
+                        initialData.forEach(async (c) => {
+                            await setDoc(window._getDocRef(c.id), c);
+                        });
+                    } else if (fetchedData.length > 0) {
+                        state.credits = fetchedData;
+                    } else {
+                        state.credits = [];
+                    }
+                    
+                    state.isDBLoaded = true;
+                    window.render(); // Perbarui tampilan dengan data online
+                }, (error) => {
+                    console.error("Firestore Error:", error);
+                    fallbackToLocal();
+                });
+            };
+
+            initAuth();
+        } else {
+            // Mode Tanpa Database (Fallback untuk jaga-jaga)
+            fallbackToLocal();
+        }
+
+        function fallbackToLocal() {
+            state.credits = initialData;
+            state.isDBLoaded = true;
+            window.db = null;
+            window.render();
+        }
+        // =========================================================================
+
+
+        // --- Ikon SVG ---
+        const icons = {
+            wallet: `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-16 h-16 text-indigo-200 mx-auto mb-4 drop-shadow-sm"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`,
+            walletBlue: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-indigo-600"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`,
+            user: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block mr-1 text-indigo-400"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+            userLarge: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+            plus: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>`,
+            arrowLeft: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>`,
+            trash: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-rose-300 hover:text-rose-400 transition-colors"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
+            checkCircle: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" class="text-emerald-500 mr-3 flex-shrink-0 drop-shadow-sm"><path fill-rule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clip-rule="evenodd" /></svg>`,
+            circle: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-300 mr-3 flex-shrink-0"><circle cx="12" cy="12" r="10"/></svg>`,
+            creditCard: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>`,
+            save: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`,
+            logout: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500 hover:text-rose-500 transition-colors"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>`
+        };
+
+        // --- Helper Format Mata Uang ---
+        const formatRupiah = (number) => {
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR',
+                minimumFractionDigits: 0
+            }).format(number);
+        };
+
+        // --- Global Handlers (Tersedia untuk HTML) ---
+        window.login = (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const type = form.loginType.value;
+            const pin = form.pin.value.trim();
+            const errorMsg = document.getElementById('login-error');
+
+            if (!pin) {
+                errorMsg.innerText = "Masukkan PIN Anda!";
+                errorMsg.classList.remove('hidden');
+                return;
+            }
+
+            if (type === 'admin') {
+                if (pin === '1234') { // PIN Hardcode Admin
+                    state.role = 'admin';
+                    state.currentUser = 'Admin';
+                    state.view = 'list';
+                    window.render();
+                } else {
+                    errorMsg.innerText = "PIN Admin Salah!";
+                    errorMsg.classList.remove('hidden');
+                }
+            } else {
+                // Login sebagai Pelanggan
+                const userCredit = state.credits.find(c => c.userPin === pin);
+                if (userCredit) {
+                    state.role = 'user';
+                    state.currentUser = userCredit.personName;
+                    state.view = 'list';
+                    window.render();
+                } else {
+                    errorMsg.innerText = "PIN Pelanggan tidak ditemukan!";
+                    errorMsg.classList.remove('hidden');
+                }
+            }
+        };
+
+        window.logout = () => {
+            state.role = null;
+            state.currentUser = null;
+            state.view = 'login';
+            window.render();
+        };
+
+        window.openDetail = (id) => {
+            state.selectedId = id;
+            state.view = 'detail';
+            window.render();
+        };
+
+        window.goBack = () => {
+            state.selectedId = null;
+            state.view = 'list';
+            window.render();
+        };
+
+        window.openAddForm = () => {
+            state.view = 'add';
+            window.render();
+        };
+
+        window.deleteCredit = async (id) => {
+            if (confirm('Yakin ingin menghapus catatan cicilan ini?')) {
+                if (window.db) {
+                    await deleteDoc(window._getDocRef(id));
+                    // re-render ditangani otomatis oleh onSnapshot Firestore
+                } else {
+                    state.credits = state.credits.filter(c => c.id !== id);
+                }
+                state.view = 'list';
+                window.render();
+            }
+        };
+
+        window.toggleInstallment = async (creditId, installmentId, isPaid) => {
+            if (state.role !== 'admin') return;
+            const credit = state.credits.find(c => c.id === creditId);
+            if(!credit) return;
+
+            const today = new Date().toISOString().split('T')[0];
+            const updatedInstallments = credit.installments.map(inst => {
+                if (inst.id === installmentId) {
+                    return { ...inst, isPaid: !isPaid, date: !isPaid ? today : '' };
+                }
+                return inst;
+            });
+
+            const updatedCredit = { ...credit, installments: updatedInstallments };
+
+            if (window.db) {
+                // Simpan ke Cloud Database
+                await setDoc(window._getDocRef(creditId), updatedCredit, { merge: true });
+            } else {
+                // Simpan Offline (Fallback)
+                state.credits = state.credits.map(c => c.id === creditId ? updatedCredit : c);
+                window.render();
+            }
+        };
+
+        window.updateDate = async (creditId, installmentId, newDate) => {
+            if (state.role !== 'admin') return;
+            const credit = state.credits.find(c => c.id === creditId);
+            if(!credit) return;
+
+            const updatedInstallments = credit.installments.map(inst => {
+                if (inst.id === installmentId) {
+                    return { ...inst, date: newDate };
+                }
+                return inst;
+            });
+
+            const updatedCredit = { ...credit, installments: updatedInstallments };
+
+            if (window.db) {
+                await setDoc(window._getDocRef(creditId), updatedCredit, { merge: true });
+            } else {
+                state.credits = state.credits.map(c => c.id === creditId ? updatedCredit : c);
+                window.render();
+            }
+        };
+
+        window.submitAddForm = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const itemName = form.itemName.value;
+            const personName = form.personName.value || 'Sendiri';
+            const userPin = form.userPin.value || Math.floor(1000 + Math.random() * 9000).toString();
+            const amountStr = form.amount.value;
+            const totalMonthsStr = form.totalMonths.value;
+            let currentMonth = parseInt(form.startMonth.value);
+            let currentYear = parseInt(form.startYear.value);
+
+            const msgBox = document.getElementById('error-msg');
+
+            if (!itemName || !amountStr || !totalMonthsStr) {
+                msgBox.innerText = "Mohon lengkapi nama barang, jumlah, dan lama bulan!";
+                msgBox.classList.remove('hidden');
+                return;
+            }
+
+            const total = parseInt(totalMonthsStr);
+            const amountNum = parseInt(amountStr.replace(/\D/g, ''));
+            const monthNames = [
+                'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 
+                'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+            ];
+
+            const installments = [];
+            for(let i=0; i<total; i++) {
+                installments.push({
+                    id: crypto.randomUUID(),
+                    monthName: `${monthNames[currentMonth]} ${currentYear}`,
+                    isPaid: false,
+                    date: ''
+                });
+                currentMonth++;
+                if (currentMonth > 11) {
+                    currentMonth = 0;
+                    currentYear++;
+                }
+            }
+
+            const newCredit = {
+                id: crypto.randomUUID(),
+                itemName: itemName,
+                personName: personName,
+                userPin: userPin,
+                amount: amountNum,
+                totalMonths: total,
+                installments: installments
+            };
+
+            if (window.db) {
+                await setDoc(window._getDocRef(newCredit.id), newCredit);
+            } else {
+                state.credits.push(newCredit);
+            }
+            
+            state.view = 'list';
+            window.render();
+        };
+
+        // --- Template Generators ---
+        function renderLogin() {
+            return `
+                <div class="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 relative overflow-hidden">
+                    <div class="absolute top-[-10%] left-[-10%] w-72 h-72 bg-indigo-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20"></div>
+                    <div class="absolute bottom-[-10%] right-[-10%] w-72 h-72 bg-purple-400 rounded-full mix-blend-multiply filter blur-3xl opacity-20"></div>
+
+                    <div class="w-full max-w-sm bg-white/80 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-2xl shadow-indigo-100/50 border border-white relative z-10">
+                        <div class="text-center mb-10">
+                            <div class="bg-gradient-to-tr from-indigo-100 to-purple-50 w-20 h-20 rounded-[1.5rem] flex items-center justify-center mx-auto mb-5 shadow-inner border border-white">
+                                ${icons.walletBlue}
+                            </div>
+                            <h2 class="text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 tracking-tight leading-tight">Buku Cicilan<br/>Jamaludin</h2>
+                            <p class="text-slate-500 text-sm mt-2 font-medium">Silakan masuk untuk melanjutkan</p>
+                        </div>
+
+                        <div id="login-error" class="hidden bg-rose-50 text-rose-600 p-4 rounded-2xl text-sm mb-6 border border-rose-100 text-center font-bold shadow-sm"></div>
+
+                        <form onsubmit="window.login(event)">
+                            <div class="mb-5">
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Masuk Sebagai</label>
+                                <div class="relative">
+                                    <select name="loginType" class="w-full appearance-none border-2 border-slate-200 rounded-2xl p-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all bg-slate-50/50 text-slate-700 font-bold cursor-pointer">
+                                        <option value="user">Pelanggan</option>
+                                        <option value="admin">Admin</option>
+                                    </select>
+                                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-500">
+                                        <svg class="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="pin-container" class="mb-8 block group">
+                                <label class="block text-sm font-bold text-slate-700 mb-2">PIN Keamanan</label>
+                                <input type="password" name="pin" placeholder="Masukkan PIN" class="w-full border-2 border-slate-200 rounded-2xl p-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all bg-slate-50/50 text-slate-800 placeholder-slate-400 font-bold tracking-widest text-center">
+                                <p class="text-[11px] text-slate-500 mt-3 font-medium bg-slate-100 p-2.5 rounded-xl border border-slate-200">
+                                    <b>Demo PIN:</b><br/>Admin: 1234 | Ang Yun: 1111 | Ang Ibnu: 2222
+                                </p>
+                            </div>
+
+                            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold py-4 rounded-2xl hover:from-indigo-700 hover:to-purple-700 active:scale-[0.98] transition-all shadow-lg shadow-indigo-200 text-lg tracking-wide">
+                                Masuk Aplikasi
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderList() {
+            let cardsHTML = '';
+
+            let visibleCredits = state.credits;
+            if (state.role !== 'admin') {
+                visibleCredits = state.credits.filter(c => 
+                    c.personName.toLowerCase() === state.currentUser.toLowerCase()
+                );
+            }
+
+            if (visibleCredits.length === 0) {
+                cardsHTML = `
+                    <div class="text-center py-16 bg-white rounded-[2rem] shadow-sm border border-slate-100 mx-4">
+                        ${icons.wallet}
+                        <p class="text-slate-600 font-bold text-lg">Belum ada catatan cicilan.</p>
+                        ${state.role !== 'admin' ? `<p class="text-sm text-slate-400 mt-2 font-medium">Pastikan PIN yang Anda masukkan benar.</p>` : ''}
+                    </div>
+                `;
+            } else {
+                cardsHTML = visibleCredits.map(credit => {
+                    const paidCount = credit.installments.filter(i => i.isPaid).length;
+                    const progress = (paidCount / credit.totalMonths) * 100;
+                    
+                    const isFullyPaid = paidCount === credit.totalMonths;
+                    const sisaBulan = credit.totalMonths - paidCount;
+                    const sisaTagihan = sisaBulan * credit.amount;
+
+                    const badgeHTML = isFullyPaid 
+                        ? `<div class="bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-xl text-xs font-black border border-emerald-100 shadow-sm whitespace-nowrap">🎉 LUNAS</div>`
+                        : `<div class="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl text-[11px] font-black border border-indigo-100 shadow-sm whitespace-nowrap">${paidCount} / ${credit.totalMonths} LUNAS</div>`;
+
+                    const progressBarColor = isFullyPaid ? 'bg-emerald-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500';
+
+                    return `
+                        <div onclick="window.openDetail('${credit.id}')" class="bg-white p-6 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 cursor-pointer hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] hover:-translate-y-1 transition-all duration-300 mb-5 mx-4 group">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 class="font-extrabold text-xl text-slate-800 group-hover:text-indigo-600 transition-colors">${credit.itemName}</h3>
+                                    <div class="flex items-center text-sm font-medium text-slate-500 mt-1.5">
+                                        ${icons.user} ${credit.personName}
+                                    </div>
+                                </div>
+                                ${badgeHTML}
+                            </div>
+                            
+                            <div class="flex items-center justify-between text-sm mb-3">
+                                <span class="font-bold text-slate-700 text-lg">${formatRupiah(credit.amount)}<span class="text-slate-400 font-medium text-sm">/bln</span></span>
+                                <span class="flex items-center text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1.5 rounded-lg group-hover:bg-indigo-100 transition-colors border border-indigo-100 shadow-sm whitespace-nowrap">
+                                    Lihat Detail
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                                </span>
+                            </div>
+
+                            ${!isFullyPaid ? `
+                            <div class="flex justify-between items-end mb-1.5 mt-4">
+                                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Sisa Tagihan</span>
+                                <span class="text-sm font-black text-rose-500">${formatRupiah(sisaTagihan)}</span>
+                            </div>
+                            ` : `
+                            <div class="flex justify-between items-end mb-1.5 mt-4">
+                                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Status</span>
+                                <span class="text-sm font-black text-emerald-600">Selesai Berjalan</span>
+                            </div>
+                            `}
+
+                            <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden shadow-inner">
+                                <div class="${progressBarColor} h-full transition-all duration-700 ease-out rounded-full" style="width: ${progress}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            const addButtonHTML = state.role === 'admin' ? `
+                <button onclick="window.openAddForm()" class="fixed bottom-8 right-8 lg:right-auto lg:ml-[320px] bg-gradient-to-r from-indigo-600 to-purple-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-300/50 hover:shadow-indigo-400/50 hover:-translate-y-1 active:scale-95 transition-all duration-300 z-50">
+                    ${icons.plus}
+                </button>
+            ` : '';
+
+            const badgeRole = state.role === 'admin' 
+                ? '<span class="bg-purple-100 text-purple-700 px-2.5 py-1 rounded-lg text-[10px] font-black tracking-wider ml-3 shadow-sm border border-purple-200">ADMIN</span>' 
+                : '<span class="bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-lg text-[10px] font-black tracking-wider ml-3 shadow-sm border border-emerald-200">PELANGGAN</span>';
+
+            return `
+                <div class="pb-24 min-h-screen bg-slate-50">
+                    <div class="pt-8 pb-6 px-6 bg-slate-50/90 sticky top-0 z-40 backdrop-blur-md">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h1 class="text-3xl font-extrabold text-slate-800 tracking-tight leading-tight">Buku Cicilan<br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">Jamaludin</span></h1>
+                                <div class="flex items-center mt-3 bg-white py-1.5 px-3 rounded-xl shadow-sm border border-slate-100 inline-flex">
+                                    <div class="w-2 h-2 rounded-full ${window.db ? 'bg-emerald-500' : 'bg-amber-400'} mr-2 animate-pulse" title="${window.db ? 'Tersambung ke Cloud' : 'Mode Offline'}"></div>
+                                    <p class="text-slate-600 text-sm font-medium">Halo, <span class="font-bold text-slate-800">${state.currentUser}</span></p>
+                                    ${badgeRole}
+                                </div>
+                            </div>
+                            <button onclick="window.logout()" class="p-3 bg-white rounded-2xl shadow-sm border border-slate-100 hover:bg-rose-50 hover:border-rose-100 transition-colors group" title="Keluar">
+                                ${icons.logout}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="pt-2">
+                        ${cardsHTML}
+                    </div>
+
+                    ${addButtonHTML}
+                </div>
+            `;
+        }
+
+        function renderDetail() {
+            const credit = state.credits.find(c => c.id === state.selectedId);
+            if (!credit) return '';
+
+            const isAdmin = state.role === 'admin';
+            const paidCount = credit.installments.filter(i => i.isPaid).length;
+
+            const installmentsHTML = credit.installments.map((inst, index) => {
+                const isPaid = inst.isPaid;
+                const borderClass = isPaid ? 'border-emerald-200 bg-emerald-50/40 shadow-emerald-100/50' : 'border-slate-100 bg-white hover:border-indigo-100';
+                const textClass = isPaid ? 'text-slate-800' : 'text-slate-600';
+                const icon = isPaid ? icons.checkCircle : icons.circle;
+                
+                let dateInputHTML = '';
+                if (isPaid) {
+                    if (isAdmin) {
+                        dateInputHTML = `
+                            <div class="ml-4 w-[130px]" onclick="event.stopPropagation()">
+                                <input 
+                                    type="date" 
+                                    value="${inst.date}"
+                                    onchange="window.updateDate('${credit.id}', '${inst.id}', this.value)"
+                                    class="text-xs font-bold bg-white border border-emerald-200 text-emerald-700 rounded-xl p-2 w-full outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all"
+                                />
+                            </div>
+                        `;
+                    } else {
+                        dateInputHTML = `
+                            <div class="ml-4 text-xs font-bold text-emerald-700 bg-emerald-100/80 border border-emerald-200 px-3 py-1.5 rounded-xl shadow-sm">
+                                Lunas: ${inst.date}
+                            </div>
+                        `;
+                    }
+                }
+
+                const cursorClass = isAdmin ? 'cursor-pointer hover:-translate-y-0.5' : 'cursor-default';
+                const clickHandler = isAdmin ? `onclick="window.toggleInstallment('${credit.id}', '${inst.id}', ${isPaid})"` : '';
+
+                return `
+                    <div class="flex flex-col p-4 rounded-2xl shadow-sm border transition-all duration-300 mb-3 mx-4 ${borderClass} ${cursorClass}" ${clickHandler}>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center flex-1 select-none">
+                                ${icon}
+                                <div>
+                                    <p class="font-extrabold text-[15px] ${textClass}">Bulan ${index + 1}</p>
+                                    <p class="text-sm font-medium text-slate-500 mt-0.5">${inst.monthName}</p>
+                                </div>
+                            </div>
+                            ${dateInputHTML}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="min-h-screen bg-slate-50 pb-12 relative">
+                    <div class="bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 px-6 pt-8 pb-10 text-white rounded-b-[2.5rem] shadow-xl shadow-indigo-200/50 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full blur-3xl translate-x-1/2 -translate-y-1/2"></div>
+                        <div class="absolute bottom-0 left-0 w-40 h-40 bg-purple-400 opacity-20 rounded-full blur-2xl -translate-x-1/2 translate-y-1/2"></div>
+
+                        <div class="flex items-center justify-between mb-8 relative z-10">
+                            <button onclick="window.goBack()" class="p-2.5 hover:bg-white/20 rounded-2xl transition-all bg-white/10 backdrop-blur-md border border-white/10">
+                                ${icons.arrowLeft}
+                            </button>
+                            <h2 class="font-bold text-sm tracking-widest text-indigo-100 uppercase">Detail Cicilan</h2>
+                            ${isAdmin ? `
+                                <button onclick="window.deleteCredit('${credit.id}')" class="p-2.5 hover:bg-rose-500/80 rounded-2xl transition-all bg-white/10 backdrop-blur-md border border-white/10">
+                                    ${icons.trash}
+                                </button>
+                            ` : `<div class="w-[44px]"></div>`}
+                        </div>
+                        
+                        <div class="relative z-10 mt-2">
+                            <h1 class="text-3xl font-black mb-2 leading-tight">${credit.itemName}</h1>
+                            <div class="flex items-center text-indigo-100 mb-6 bg-white/10 inline-flex px-3 py-1.5 rounded-xl backdrop-blur-sm border border-white/10">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                <span class="text-sm font-bold tracking-wide">${credit.personName}</span>
+                            </div>
+                            
+                            <div class="bg-white/10 rounded-[1.5rem] p-5 backdrop-blur-md border border-white/20 shadow-inner">
+                                <div class="flex justify-between items-center mb-3">
+                                    <span class="text-indigo-100 font-medium text-sm">Tagihan per Bulan</span>
+                                    <span class="font-black text-2xl tracking-tight">${formatRupiah(credit.amount)}</span>
+                                </div>
+                                <div class="w-full bg-black/20 rounded-full h-1.5 mb-3 overflow-hidden">
+                                    <div class="bg-emerald-400 h-full rounded-full transition-all duration-700" style="width: ${(paidCount / credit.totalMonths) * 100}%"></div>
+                                </div>
+                                <div class="flex justify-between items-center text-xs font-bold text-indigo-100 uppercase tracking-wider">
+                                    <span>Progress Lunas</span>
+                                    <span class="text-white">${paidCount} dari ${credit.totalMonths} Bulan</span>
+                                </div>
+                                ${paidCount < credit.totalMonths ? `
+                                <div class="mt-4 pt-4 border-t border-white/10">
+                                    <a href="https://listransfer.vercel.app/" target="_blank" class="w-full flex justify-center items-center text-sm font-bold text-indigo-900 bg-white/95 hover:bg-white py-2.5 rounded-xl shadow-sm hover:shadow-md transition-all">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 mr-2 text-indigo-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+                                        Metode Pembayaran (Transfer)
+                                    </a>
+                                </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-8">
+                        <div class="flex justify-between items-end mb-5 px-6">
+                            <h3 class="font-extrabold text-slate-800 text-xl">Daftar Setoran</h3>
+                            ${!isAdmin 
+                                ? `<span class="text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-100 px-2 py-1 rounded-lg">Mode Lihat</span>` 
+                                : `<span class="text-[10px] text-indigo-600 font-black uppercase tracking-wider bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 shadow-sm animate-pulse">Ketuk untuk ubah status</span>`}
+                        </div>
+                        <div class="space-y-1">
+                            ${installmentsHTML}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderAddForm() {
+            const currentMonth = new Date().getMonth();
+            const currentYear = new Date().getFullYear();
+            
+            const monthNames = [
+                'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 
+                'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+            ];
+
+            const monthOptions = monthNames.map((m, i) => {
+                return `<option value="${i}" ${i === currentMonth ? 'selected' : ''}>${m}</option>`;
+            }).join('');
+
+            return `
+                <div class="min-h-screen bg-slate-50">
+                    <div class="flex items-center px-6 py-6 border-b border-slate-200 bg-white sticky top-0 z-10 shadow-sm">
+                        <button onclick="window.goBack()" class="p-2.5 -ml-2 text-slate-600 hover:bg-slate-100 rounded-2xl bg-slate-50 shadow-sm border border-slate-200 transition-colors">
+                            ${icons.arrowLeft}
+                        </button>
+                        <h2 class="font-extrabold text-xl ml-4 text-slate-800">Tambah Catatan Baru</h2>
+                    </div>
+
+                    <form onsubmit="window.submitAddForm(event)" class="p-6 space-y-6">
+                        <div id="error-msg" class="hidden bg-rose-50 text-rose-600 p-4 rounded-2xl text-sm mb-2 border border-rose-100 font-bold shadow-sm"></div>
+
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-5">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Nama Barang / Cicilan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                        ${icons.creditCard}
+                                    </div>
+                                    <input type="text" name="itemName" placeholder="Contoh: Kulkas 2 Pintu" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800" />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Nama Pelanggan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                        ${icons.userLarge}
+                                    </div>
+                                    <input type="text" name="personName" placeholder="Contoh: Ang Yun" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800" />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Buat PIN Pelanggan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                    </div>
+                                    <input type="text" name="userPin" placeholder="Contoh: 1234" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800 tracking-widest" />
+                                </div>
+                                <p class="text-xs font-semibold text-slate-400 mt-2 ml-1">*Digunakan pelanggan untuk masuk (kosongkan untuk PIN acak)</p>
+                            </div>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-5">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Jumlah per Bulan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                        <span class="text-slate-400 font-black">Rp</span>
+                                    </div>
+                                    <input type="number" name="amount" placeholder="290000" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-bold text-slate-800" />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Lama Cicilan (Bulan)</label>
+                                <div class="flex items-center">
+                                    <input type="number" name="totalMonths" placeholder="6" class="w-full border-2 border-r-0 border-slate-200 rounded-l-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all text-center bg-slate-50 focus:bg-white font-bold text-slate-800 relative z-10" />
+                                    <span class="bg-slate-100 border-2 border-l-0 border-slate-200 px-5 py-3.5 rounded-r-2xl text-slate-500 text-sm font-black uppercase tracking-wider relative z-0">Bulan</span>
+                                </div>
+                            </div>
+
+                            <div class="pt-2 border-t border-slate-100 mt-5">
+                                <label class="block text-sm font-bold text-slate-700 mb-3 mt-4">Mulai Cicilan</label>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <select name="startMonth" class="border-2 border-slate-200 rounded-2xl p-3.5 bg-slate-50 focus:bg-white outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all font-bold text-slate-700 cursor-pointer">
+                                        ${monthOptions}
+                                    </select>
+                                    <input type="number" name="startYear" value="${currentYear}" class="border-2 border-slate-200 rounded-2xl p-3.5 bg-slate-50 focus:bg-white outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all font-bold text-slate-700 text-center" />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pt-2 pb-2">
+                            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold py-4 rounded-2xl hover:from-indigo-700 hover:to-purple-700 active:scale-[0.98] transition-all flex justify-center items-center shadow-lg shadow-indigo-200 text-lg tracking-wide">
+                                ${icons.save}
+                                Simpan Catatan Baru
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        // Fungsi Render Utama
+        window.render = function() {
+            const app = document.getElementById('app');
+            
+            // Tampilan Loading Saat Menghubungkan ke Database
+            if (hasValidConfig && !state.isDBLoaded) {
+                app.innerHTML = `
+                    <div class="min-h-screen flex items-center justify-center bg-slate-50 flex-col">
+                        <div class="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                        <p class="text-indigo-600 font-bold animate-pulse tracking-wide">Menghubungkan ke Database...</p>
+                    </div>`;
+                return;
+            }
+
+            app.innerHTML = ''; 
+            if (state.view === 'login') app.innerHTML = renderLogin();
+            else if (state.view === 'list') app.innerHTML = renderList();
+            else if (state.view === 'detail') app.innerHTML = renderDetail();
+            else if (state.view === 'add') app.innerHTML = renderAddForm();
+        }
+
+        // Panggilan Render Pertama
+        window.render();
+    </script>
+</body>
+</html>
