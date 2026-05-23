@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buku Cicilan Jamaludin</title>
+    <!-- Menggunakan Tailwind CSS via CDN untuk styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Sembunyikan scrollbar untuk tampilan yang lebih bersih di mobile */
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+        body {
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 selection:bg-indigo-100">
+    <!-- Kontainer Utama Aplikasi -->
+    <div id="app" class="max-w-md mx-auto bg-slate-50 min-h-screen shadow-2xl overflow-hidden relative border-x border-slate-100">
+        <!-- Tampilan akan di-render di dalam sini oleh JavaScript -->
+    </div>
+
+    <script type="module">
+        // --- Import Firebase (Firestore & Auth) ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Konfigurasi Firebase App Lingkungan ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'buku-cicilan-app';
+        
+        // 👇👇👇 PASTE CONFIG FIREBASE ANDA DI SINI 👇👇👇
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyC51v1f0vcsKv4Ws3ZCGR5KOfOx2D2V_XQ",
+            authDomain: "bukucicilan.firebaseapp.com",
+            databaseURL: "https://bukucicilan-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "bukucicilan",
+            storageBucket: "bukucicilan.firebasestorage.app",
+            messagingSenderId: "921100360718",
+            appId: "1:921100360718:web:d7e410e465901f24af705f",
+            measurementId: "G-K3XQY4KL2D"
+        };
+        // 👆👆👆 PASTE CONFIG FIREBASE ANDA DI SINI 👆👆👆
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // --- Data Awal (Untuk seeding saat database kosong pertama kali) ---
+        const initialData = [
+            {
+                id: '1', itemName: 'Cicilan Kulkas', personName: 'Ang Yun', userPin: '1111', amount: 290000, totalMonths: 6,
+                installments: [
+                    { id: '1-1', monthName: 'Desember 2025', isPaid: true, date: '2025-12-20', dueDate: '2025-12-20' },
+                    { id: '1-2', monthName: 'Januari 2026', isPaid: true, date: '2026-01-20', dueDate: '2026-01-20' },
+                    { id: '1-3', monthName: 'Februari 2026', isPaid: true, date: '2026-02-27', dueDate: '2026-02-20' },
+                    { id: '1-4', monthName: 'Maret 2026', isPaid: true, date: '2026-04-05', dueDate: '2026-03-20' },
+                    { id: '1-5', monthName: 'April 2026', isPaid: true, date: '2026-04-30', dueDate: '2026-04-20' },
+                    { id: '1-6', monthName: 'Mei 2026', isPaid: false, date: '', dueDate: '2026-05-20' },
+                ]
+            },
+            {
+                id: '2', itemName: 'Cicilan HP', personName: 'Ang Ibnu', userPin: '2222', amount: 240000, totalMonths: 10,
+                installments: [
+                    { id: '2-1', monthName: 'November 2025', isPaid: true, date: '2025-11-25', dueDate: '2025-11-25' },
+                    { id: '2-2', monthName: 'Desember 2025', isPaid: true, date: '2025-12-25', dueDate: '2025-12-25' },
+                    { id: '2-3', monthName: 'Januari 2026', isPaid: true, date: '2026-01-28', dueDate: '2026-01-25' },
+                    { id: '2-4', monthName: 'Februari 2026', isPaid: true, date: '2026-03-02', dueDate: '2026-02-25' },
+                    { id: '2-5', monthName: 'Maret 2026', isPaid: true, date: '2026-04-07', dueDate: '2026-03-25' },
+                    { id: '2-6', monthName: 'April 2026', isPaid: false, date: '', dueDate: '2026-04-25' },
+                    { id: '2-7', monthName: 'Mei 2026', isPaid: false, date: '', dueDate: '2026-05-25' },
+                    { id: '2-8', monthName: 'Juni 2026', isPaid: false, date: '', dueDate: '2026-06-25' },
+                    { id: '2-9', monthName: 'Juli 2026', isPaid: false, date: '', dueDate: '2026-07-25' },
+                    { id: '2-10', monthName: 'Agustus 2026', isPaid: false, date: '', dueDate: '2026-08-25' },
+                ]
+            }
+        ];
+
+        // --- State Manajemen ---
+        let state = {
+            isLoadingDb: true, // Menandakan sedang sync dengan Firebase
+            view: 'login', // Dimulai dari halaman 'login'
+            role: null, // 'admin' atau 'user'
+            currentUser: null, // Menyimpan nama user yang login
+            selectedId: null,
+            filterType: 'all',
+            itemToDelete: null, // ID item yang akan dihapus (untuk modal konfirmasi)
+            credits: [] // Data akan diisi dari Firestore
+        };
+
+        // --- STREAMING_CHUNK: Mendefinisikan Ikon SVG ---
+        const icons = {
+            wallet: `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-16 h-16 text-indigo-200 mx-auto mb-4 drop-shadow-sm"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`,
+            walletBlue: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-indigo-600"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`,
+            user: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block mr-1 text-indigo-400"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+            userLarge: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+            plus: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>`,
+            arrowLeft: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>`,
+            trash: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-rose-300 hover:text-rose-400 transition-colors"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
+            checkCircle: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" class="text-emerald-500 mr-3 flex-shrink-0 drop-shadow-sm"><path fill-rule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clip-rule="evenodd" /></svg>`,
+            circle: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-300 mr-3 flex-shrink-0"><circle cx="12" cy="12" r="10"/></svg>`,
+            warningCircle: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-rose-500 mr-3 flex-shrink-0 drop-shadow-sm"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+            creditCard: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>`,
+            save: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`,
+            logout: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500 hover:text-rose-500 transition-colors"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>`,
+            edit: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+            spinner: `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`
+        };
+
+        // --- Helper Functions ---
+        const formatRupiah = (number) => {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(number);
+        };
+
+        const formatDateToID = (dateStr) => {
+            if (!dateStr) return '';
+            const [year, month, day] = dateStr.split('-');
+            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des'];
+            return `${parseInt(day)} ${monthNames[parseInt(month)-1]} ${year}`;
+        };
+
+        // Helper path Firestore (RULE 1)
+        const getCreditRef = (creditId) => doc(db, 'artifacts', appId, 'public', 'data', 'credits', creditId);
+        const getCreditsCollection = () => collection(db, 'artifacts', appId, 'public', 'data', 'credits');
+
+        // --- STREAMING_CHUNK: Autentikasi dan Sinkronisasi Firestore ---
+        async function initApp() {
+            try {
+                // RULE 3: Authenticate FIRST before queries
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                listenToFirestore();
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+                document.getElementById('app').innerHTML = `<div class="p-8 text-center text-rose-500 font-bold">Gagal terhubung ke server database.</div>`;
+            }
+        }
+
+        let hasSeededData = false;
+
+        function listenToFirestore() {
+            if (!auth.currentUser) return;
+
+            // RULE 2: No Complex Queries, fetch all then filter client-side
+            onSnapshot(getCreditsCollection(), (snapshot) => {
+                const fetchedCredits = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                
+                // Seed data awal jika kosong (Hanya dieksekusi sekali agar aplikasi tidak kosong blong)
+                if (fetchedCredits.length === 0 && !hasSeededData) {
+                    hasSeededData = true;
+                    initialData.forEach(async (credit) => {
+                        await setDoc(getCreditRef(credit.id), credit);
+                    });
+                    // Biarkan onSnapshot memanggil render ulang setelah seeding
+                } else {
+                    state.credits = fetchedCredits;
+                    state.isLoadingDb = false;
+                    render();
+                }
+            }, (error) => {
+                console.error("Firestore Listen Error:", error);
+                document.getElementById('app').innerHTML = `<div class="p-8 text-center text-rose-500 font-bold">Terputus dari sinkronisasi server.</div>`;
+            });
+        }
+
+        // --- STREAMING_CHUNK: Global UI Handlers (Disambungkan ke window) ---
+        window.login = (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const type = form.loginType.value;
+            const pin = form.pin.value.trim();
+            const errorMsg = document.getElementById('login-error');
+
+            if (!pin) {
+                errorMsg.innerText = "Masukkan PIN Anda!";
+                errorMsg.classList.remove('hidden');
+                return;
+            }
+
+            if (type === 'admin') {
+                if (pin === '008701') { 
+                    state.role = 'admin';
+                    state.currentUser = 'Admin';
+                    state.view = 'list';
+                    render();
+                } else {
+                    errorMsg.innerText = "PIN Admin Salah!";
+                    errorMsg.classList.remove('hidden');
+                }
+            } else {
+                const userCredit = state.credits.find(c => c.userPin === pin);
+                if (userCredit) {
+                    state.role = 'user';
+                    state.currentUser = userCredit.personName;
+                    state.view = 'list';
+                    render();
+                } else {
+                    errorMsg.innerText = "PIN Pelanggan tidak ditemukan!";
+                    errorMsg.classList.remove('hidden');
+                }
+            }
+        };
+
+        window.logout = () => {
+            state.role = null;
+            state.currentUser = null;
+            state.view = 'login';
+            render();
+        };
+
+        window.openDetail = (id) => {
+            state.selectedId = id;
+            state.view = 'detail';
+            render();
+        };
+
+        window.goBack = () => {
+            state.selectedId = null;
+            state.view = 'list';
+            render();
+        };
+
+        window.setFilter = (type) => {
+            state.filterType = type;
+            render();
+        };
+
+        window.openAddForm = () => {
+            state.view = 'add';
+            render();
+        };
+
+        window.openEditForm = () => {
+            state.view = 'edit';
+            render();
+        };
+
+        // --- STREAMING_CHUNK: Mutasi Data Firebase (CRUD) ---
+        window.confirmDelete = (id) => {
+            state.itemToDelete = id;
+            render();
+        };
+
+        window.cancelDelete = () => {
+            state.itemToDelete = null;
+            render();
+        };
+
+        window.executeDelete = async () => {
+            if (!auth.currentUser || !state.itemToDelete) return;
+            const id = state.itemToDelete;
+            state.itemToDelete = null;
+            state.view = 'list'; 
+            render(); // Segera kembali ke list
+            
+            try {
+                await deleteDoc(getCreditRef(id));
+            } catch (error) {
+                console.error("Gagal menghapus:", error);
+            }
+        };
+
+        window.toggleInstallment = async (creditId, installmentId, isPaid) => {
+            if (state.role !== 'admin' || !auth.currentUser) return;
+            const today = new Date().toISOString().split('T')[0];
+            
+            // Cari data di state lokal untuk dimodifikasi
+            const creditToUpdate = JSON.parse(JSON.stringify(state.credits.find(c => c.id === creditId)));
+            if (!creditToUpdate) return;
+
+            creditToUpdate.installments = creditToUpdate.installments.map(inst => {
+                if (inst.id === installmentId) {
+                    return { ...inst, isPaid: !isPaid, date: !isPaid ? today : '' };
+                }
+                return inst;
+            });
+
+            // Update ke Firebase
+            try {
+                await setDoc(getCreditRef(creditId), creditToUpdate);
+            } catch (err) {
+                console.error("Gagal update cicilan:", err);
+            }
+        };
+
+        window.updateDate = async (creditId, installmentId, newDate) => {
+            if (state.role !== 'admin' || !auth.currentUser) return;
+
+            const creditToUpdate = JSON.parse(JSON.stringify(state.credits.find(c => c.id === creditId)));
+            if (!creditToUpdate) return;
+
+            creditToUpdate.installments = creditToUpdate.installments.map(inst => {
+                if (inst.id === installmentId) {
+                    return { ...inst, date: newDate };
+                }
+                return inst;
+            });
+
+            try {
+                await setDoc(getCreditRef(creditId), creditToUpdate);
+            } catch (err) {
+                console.error("Gagal update tanggal:", err);
+            }
+        };
+
+        window.submitEditForm = async (e) => {
+            e.preventDefault();
+            if (!auth.currentUser) return;
+
+            const form = e.target;
+            const itemName = form.itemName.value;
+            const personName = form.personName.value;
+            const userPin = form.userPin.value;
+            const amountStr = form.amount.value;
+            const msgBox = document.getElementById('edit-error-msg');
+
+            if (!itemName || !amountStr || !personName) {
+                msgBox.innerText = "Nama barang, pelanggan, dan jumlah tidak boleh kosong!";
+                msgBox.classList.remove('hidden');
+                return;
+            }
+
+            const amountNum = parseInt(amountStr.replace(/\D/g, ''));
+            const creditToUpdate = JSON.parse(JSON.stringify(state.credits.find(c => c.id === state.selectedId)));
+            
+            creditToUpdate.itemName = itemName;
+            creditToUpdate.personName = personName;
+            creditToUpdate.userPin = userPin;
+            creditToUpdate.amount = amountNum;
+
+            try {
+                // Tampilkan loading di tombol (opsional) atau langsung kembali
+                state.view = 'detail';
+                render();
+                await setDoc(getCreditRef(creditToUpdate.id), creditToUpdate);
+            } catch (err) {
+                console.error("Gagal menyimpan edit:", err);
+            }
+        };
+
+        window.submitAddForm = async (e) => {
+            e.preventDefault();
+            if (!auth.currentUser) return;
+
+            const form = e.target;
+            const itemName = form.itemName.value;
+            const personName = form.personName.value || 'Sendiri';
+            const userPin = form.userPin.value || Math.floor(1000 + Math.random() * 9000).toString();
+            const amountStr = form.amount.value;
+            const totalMonthsStr = form.totalMonths.value;
+            const dueDay = parseInt(form.dueDay.value) || 25;
+            let currentMonth = parseInt(form.startMonth.value);
+            let currentYear = parseInt(form.startYear.value);
+
+            const msgBox = document.getElementById('error-msg');
+
+            if (!itemName || !amountStr || !totalMonthsStr || !dueDay) {
+                msgBox.innerText = "Lengkapi nama barang, jumlah, lama bulan, dan tanggal tempo!";
+                msgBox.classList.remove('hidden');
+                return;
+            }
+
+            const total = parseInt(totalMonthsStr);
+            const amountNum = parseInt(amountStr.replace(/\D/g, ''));
+            const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+            const installments = [];
+            for(let i=0; i<total; i++) {
+                const monthStr = (currentMonth + 1).toString().padStart(2, '0');
+                const dayStr = dueDay.toString().padStart(2, '0');
+                const dueDateStr = `${currentYear}-${monthStr}-${dayStr}`;
+
+                installments.push({
+                    id: crypto.randomUUID(),
+                    monthName: `${monthNames[currentMonth]} ${currentYear}`,
+                    isPaid: false,
+                    date: '',
+                    dueDate: dueDateStr
+                });
+                
+                currentMonth++;
+                if (currentMonth > 11) {
+                    currentMonth = 0;
+                    currentYear++;
+                }
+            }
+
+            const newCredit = {
+                id: crypto.randomUUID(),
+                itemName: itemName,
+                personName: personName,
+                userPin: userPin,
+                amount: amountNum,
+                totalMonths: total,
+                installments: installments
+            };
+
+            try {
+                state.view = 'list';
+                render();
+                await setDoc(getCreditRef(newCredit.id), newCredit);
+            } catch (err) {
+                console.error("Gagal menambah catatan:", err);
+            }
+        };
+
+        // --- STREAMING_CHUNK: Render Engine Utama ---
+        function render() {
+            const app = document.getElementById('app');
+            app.innerHTML = ''; 
+
+            if (state.isLoadingDb) {
+                app.innerHTML = renderLoading();
+            } else if (state.view === 'login') {
+                app.innerHTML = renderLogin();
+            } else if (state.view === 'list') {
+                app.innerHTML = renderList();
+            } else if (state.view === 'detail') {
+                app.innerHTML = renderDetail();
+            } else if (state.view === 'add') {
+                app.innerHTML = renderAddForm();
+            } else if (state.view === 'edit') {
+                app.innerHTML = renderEditForm();
+            }
+
+            // Append Modal if itemToDelete is set
+            if (state.itemToDelete) {
+                app.innerHTML += renderDeleteModal();
+            }
+        }
+
+        // --- STREAMING_CHUNK: Komponen UI (Loading, Login, Modal) ---
+        function renderLoading() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col justify-center items-center p-6">
+                    <div class="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                    <p class="text-indigo-600 font-bold animate-pulse">Menghubungkan ke Server Firebase...</p>
+                </div>
+            `;
+        }
+
+        function renderDeleteModal() {
+            return `
+                <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+                    <div class="bg-white rounded-[2rem] p-6 max-w-sm w-full shadow-2xl scale-100 animate-[bounce_0.3s_ease-out]">
+                        <div class="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-rose-500"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        </div>
+                        <h3 class="text-xl font-black text-center text-slate-800 mb-2">Hapus Catatan?</h3>
+                        <p class="text-center text-slate-500 text-sm mb-6 font-medium">Tindakan ini tidak dapat dibatalkan. Seluruh histori pembayaran cicilan ini akan terhapus dari server.</p>
+                        <div class="flex space-x-3">
+                            <button onclick="window.cancelDelete()" class="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-colors">Batal</button>
+                            <button onclick="window.executeDelete()" class="flex-1 py-3.5 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-xl shadow-lg shadow-rose-200 transition-colors">Ya, Hapus</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLogin() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col justify-center items-center p-6 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-64 h-64 bg-purple-200 opacity-40 rounded-full blur-3xl translate-x-1/3 -translate-y-1/3"></div>
+                    <div class="absolute bottom-0 left-0 w-64 h-64 bg-indigo-200 opacity-40 rounded-full blur-3xl -translate-x-1/3 translate-y-1/3"></div>
+                    
+                    <div class="w-full max-w-sm relative z-10">
+                        <div class="text-center mb-10 flex flex-col items-center">
+                            ${icons.walletBlue}
+                            <h1 class="text-4xl font-black text-slate-800 tracking-tight mb-2 mt-4">Buku Cicilan</h1>
+                            <p class="text-indigo-600 font-bold tracking-widest uppercase text-sm">Jamaludin (Cloud)</p>
+                        </div>
+
+                        <div class="bg-white p-8 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] border border-white relative z-20">
+                            <form onsubmit="window.login(event)" class="space-y-6">
+                                <div id="login-error" class="hidden bg-rose-50 text-rose-600 p-4 rounded-2xl text-sm font-bold border border-rose-100 shadow-sm text-center"></div>
+                                
+                                <div>
+                                    <label class="block text-sm font-bold text-slate-700 mb-3">Masuk Sebagai</label>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <label class="cursor-pointer relative">
+                                            <input type="radio" name="loginType" value="user" class="peer sr-only" checked>
+                                            <div class="text-center p-3 rounded-2xl border-2 border-slate-100 font-bold text-slate-500 peer-checked:border-indigo-500 peer-checked:bg-indigo-50 peer-checked:text-indigo-700 transition-all">
+                                                Pelanggan
+                                            </div>
+                                        </label>
+                                        <label class="cursor-pointer relative">
+                                            <input type="radio" name="loginType" value="admin" class="peer sr-only">
+                                            <div class="text-center p-3 rounded-2xl border-2 border-slate-100 font-bold text-slate-500 peer-checked:border-indigo-500 peer-checked:bg-indigo-50 peer-checked:text-indigo-700 transition-all">
+                                                Admin
+                                            </div>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-bold text-slate-700 mb-3">PIN Keamanan</label>
+                                    <input type="password" name="pin" placeholder="****" class="w-full border-2 border-slate-200 rounded-2xl p-4 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all text-center text-2xl font-black tracking-[0.5em] bg-slate-50 focus:bg-white text-slate-800" autocomplete="off" />
+                                </div>
+
+                                <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-black py-4 rounded-2xl hover:from-indigo-700 hover:to-purple-700 active:scale-[0.98] transition-all shadow-lg shadow-indigo-200 tracking-wide text-lg mt-2">
+                                    Masuk Aplikasi
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- STREAMING_CHUNK: Komponen UI Dashboard & Daftar Cicilan ---
+        function renderList() {
+            let cardsHTML = '';
+            const today = new Date().toISOString().split('T')[0];
+
+            let visibleCredits = state.credits;
+            if (state.role !== 'admin') {
+                visibleCredits = state.credits.filter(c => c.personName.toLowerCase() === state.currentUser.toLowerCase());
+            } else {
+                if (state.filterType === 'overdue') {
+                    visibleCredits = state.credits.filter(c => c.installments.some(inst => !inst.isPaid && inst.dueDate < today));
+                }
+            }
+
+            let adminDashboardHTML = '';
+            if (state.role === 'admin') {
+                const currentDate = new Date();
+                const currentYear = currentDate.getFullYear();
+                const currentMonthNum = currentDate.getMonth() + 1;
+                const currentMonthPrefix = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}`;
+                
+                let totalIncomeThisMonth = 0;
+                let totalPaidInstallmentsThisMonth = 0;
+
+                state.credits.forEach(credit => {
+                    credit.installments.forEach(inst => {
+                        if (inst.isPaid && inst.date && inst.date.startsWith(currentMonthPrefix)) {
+                            totalIncomeThisMonth += credit.amount;
+                            totalPaidInstallmentsThisMonth++;
+                        }
+                    });
+                });
+
+                const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                const currentMonthName = `${monthNames[currentDate.getMonth()]} ${currentYear}`;
+
+                adminDashboardHTML = `
+                    <div class="px-4 mb-6">
+                        <div class="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-[2rem] p-6 text-white shadow-xl shadow-emerald-200/50 relative overflow-hidden group">
+                            <div class="absolute top-0 right-0 w-32 h-32 bg-white opacity-10 rounded-full blur-2xl translate-x-1/3 -translate-y-1/3 transition-transform group-hover:scale-110"></div>
+                            <div class="absolute bottom-0 left-0 w-24 h-24 bg-teal-900 opacity-20 rounded-full blur-xl -translate-x-1/2 translate-y-1/2"></div>
+                            <div class="relative z-10 flex justify-between items-start mb-4">
+                                <div class="flex items-center">
+                                    <div class="bg-white/20 p-2 rounded-xl backdrop-blur-sm mr-3 border border-white/10">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="text-white"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                                    </div>
+                                    <span class="text-emerald-50 font-bold text-xs tracking-widest uppercase">Pemasukan Server</span>
+                                </div>
+                                <span class="bg-white/20 text-white px-2.5 py-1 rounded-lg text-[10px] font-black backdrop-blur-sm border border-white/20 uppercase tracking-wider">${currentMonthName}</span>
+                            </div>
+                            <div class="relative z-10">
+                                <h2 class="text-3xl font-black tracking-tight mb-1 text-white">${formatRupiah(totalIncomeThisMonth)}</h2>
+                                <p class="text-xs text-emerald-100 font-medium flex items-center">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-1"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                    Berhasil ditagih dari ${totalPaidInstallmentsThisMonth} cicilan
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="px-4 mb-5 flex space-x-3">
+                        <button onclick="window.setFilter('all')" class="flex-1 py-2.5 rounded-2xl text-[13px] font-black uppercase tracking-wider transition-all duration-300 ${state.filterType === 'all' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'}">Semua</button>
+                        <button onclick="window.setFilter('overdue')" class="flex-1 py-2.5 rounded-2xl text-[13px] font-black uppercase tracking-wider transition-all duration-300 ${state.filterType === 'overdue' ? 'bg-rose-500 text-white shadow-lg shadow-rose-200' : 'bg-white text-slate-500 border border-slate-200 hover:bg-rose-50 hover:text-rose-600'}">Terlambat</button>
+                    </div>
+                `;
+            }
+
+            if (visibleCredits.length === 0) {
+                cardsHTML = `
+                    <div class="text-center py-16 bg-white rounded-[2rem] shadow-sm border border-slate-100 mx-4">
+                        ${icons.wallet}
+                        <p class="text-slate-600 font-bold text-lg">Belum ada catatan cicilan.</p>
+                        ${state.role !== 'admin' ? `<p class="text-sm text-slate-400 mt-2 font-medium">Pastikan nama yang Anda ketik benar.</p>` : ''}
+                    </div>
+                `;
+            } else {
+                cardsHTML = visibleCredits.map(credit => {
+                    const paidCount = credit.installments.filter(i => i.isPaid).length;
+                    const progress = (paidCount / credit.totalMonths) * 100;
+                    const isFullyPaid = paidCount === credit.totalMonths;
+                    const sisaBulan = credit.totalMonths - paidCount;
+                    const sisaTagihan = sisaBulan * credit.amount;
+                    const hasOverdue = credit.installments.some(inst => !inst.isPaid && inst.dueDate < today);
+
+                    const badgeHTML = isFullyPaid 
+                        ? `<div class="bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-xl text-xs font-black border border-emerald-100 shadow-sm whitespace-nowrap">🎉 LUNAS</div>`
+                        : `<div class="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl text-[11px] font-black border border-indigo-100 shadow-sm whitespace-nowrap">${paidCount} / ${credit.totalMonths} LUNAS</div>`;
+
+                    const progressBarColor = isFullyPaid ? 'bg-emerald-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500';
+
+                    const overdueAlert = hasOverdue 
+                        ? `<div class="absolute -top-3 -right-2 bg-rose-500 text-white p-2 rounded-xl shadow-lg shadow-rose-200 border-2 border-white animate-bounce z-10" title="Ada cicilan terlambat"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></div>` : '';
+
+                    return `
+                        <div onclick="window.openDetail('${credit.id}')" class="relative bg-white p-6 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 cursor-pointer hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] hover:-translate-y-1 transition-all duration-300 mb-5 mx-4 group">
+                            ${overdueAlert}
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 class="font-extrabold text-xl text-slate-800 group-hover:text-indigo-600 transition-colors">${credit.itemName}</h3>
+                                    <div class="flex items-center text-sm font-medium text-slate-500 mt-1.5">${icons.user} ${credit.personName}</div>
+                                </div>
+                                ${badgeHTML}
+                            </div>
+                            <div class="flex items-center justify-between text-sm mb-3">
+                                <span class="font-bold text-slate-700 text-lg">${formatRupiah(credit.amount)}<span class="text-slate-400 font-medium text-sm">/bln</span></span>
+                                <span class="flex items-center text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1.5 rounded-lg group-hover:bg-indigo-100 transition-colors border border-indigo-100 shadow-sm whitespace-nowrap">Lihat Detail<svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>
+                            </div>
+                            ${!isFullyPaid ? `
+                            <div class="flex justify-between items-end mb-1.5 mt-4">
+                                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Sisa Tagihan</span>
+                                <span class="text-sm font-black text-rose-500">${formatRupiah(sisaTagihan)}</span>
+                            </div>
+                            ` : `
+                            <div class="flex justify-between items-end mb-1.5 mt-4">
+                                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Status</span>
+                                <span class="text-sm font-black text-emerald-600">Selesai Berjalan</span>
+                            </div>
+                            `}
+                            <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden shadow-inner">
+                                <div class="${progressBarColor} h-full transition-all duration-700 ease-out rounded-full" style="width: ${progress}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            const addButtonHTML = state.role === 'admin' ? `<button onclick="window.openAddForm()" class="fixed bottom-8 right-8 lg:right-auto lg:ml-[320px] bg-gradient-to-r from-indigo-600 to-purple-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-300/50 hover:shadow-indigo-400/50 hover:-translate-y-1 active:scale-95 transition-all duration-300 z-40">${icons.plus}</button>` : '';
+
+            const badgeRole = state.role === 'admin' ? '<span class="bg-purple-100 text-purple-700 px-2.5 py-1 rounded-lg text-[10px] font-black tracking-wider ml-3 shadow-sm border border-purple-200">ADMIN</span>' : '<span class="bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-lg text-[10px] font-black tracking-wider ml-3 shadow-sm border border-emerald-200">PELANGGAN</span>';
+
+            return `
+                <div class="pb-24 min-h-screen bg-slate-50">
+                    <div class="pt-8 pb-6 px-6 bg-slate-50/90 sticky top-0 z-30 backdrop-blur-md">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h1 class="text-3xl font-extrabold text-slate-800 tracking-tight leading-tight">Buku Cicilan<br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">Jamaludin</span></h1>
+                                <div class="flex items-center mt-3 bg-white py-1.5 px-3 rounded-xl shadow-sm border border-slate-100 inline-flex">
+                                    <div class="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></div>
+                                    <p class="text-slate-600 text-sm font-medium">Halo, <span class="font-bold text-slate-800">${state.currentUser}</span></p>
+                                    ${badgeRole}
+                                </div>
+                            </div>
+                            <button onclick="window.logout()" class="p-3 bg-white rounded-2xl shadow-sm border border-slate-100 hover:bg-rose-50 hover:border-rose-100 transition-colors group" title="Keluar">${icons.logout}</button>
+                        </div>
+                    </div>
+                    <div class="pt-2">
+                        ${adminDashboardHTML}
+                        ${cardsHTML}
+                    </div>
+                    ${addButtonHTML}
+                </div>
+            `;
+        }
+
+        // --- STREAMING_CHUNK: Komponen UI Detail ---
+        function renderDetail() {
+            const credit = state.credits.find(c => c.id === state.selectedId);
+            if (!credit) return '';
+
+            const isAdmin = state.role === 'admin';
+            const paidCount = credit.installments.filter(i => i.isPaid).length;
+            const today = new Date().toISOString().split('T')[0];
+
+            const installmentsHTML = credit.installments.map((inst, index) => {
+                const isPaid = inst.isPaid;
+                const isPastDue = !isPaid && inst.dueDate < today;
+                let borderClass, textClass, icon, statusHTML;
+
+                if (isPaid) {
+                    borderClass = 'border-emerald-200 bg-emerald-50/40 shadow-emerald-100/50';
+                    textClass = 'text-slate-800';
+                    icon = icons.checkCircle;
+                    if (isAdmin) {
+                        statusHTML = `<div class="ml-4 w-[130px] flex flex-col items-end" onclick="event.stopPropagation()"><span class="text-[10px] text-emerald-600 font-bold mb-1">Tgl Bayar:</span><input type="date" value="${inst.date}" onchange="window.updateDate('${credit.id}', '${inst.id}', this.value)" class="text-xs font-bold bg-white border border-emerald-200 text-emerald-700 rounded-xl p-1.5 w-full outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 shadow-sm transition-all"/></div>`;
+                    } else {
+                        statusHTML = `<div class="ml-4 text-xs font-bold text-emerald-700 bg-emerald-100/80 border border-emerald-200 px-3 py-1.5 rounded-xl shadow-sm text-right"><div class="text-[9px] uppercase tracking-wider opacity-80 mb-0.5">Lunas</div>${formatDateToID(inst.date)}</div>`;
+                    }
+                } else if (isPastDue) {
+                    borderClass = 'border-rose-200 bg-rose-50/40 shadow-rose-100/50';
+                    textClass = 'text-rose-800';
+                    icon = icons.warningCircle;
+                    statusHTML = `<div class="ml-4 text-xs font-bold text-rose-700 bg-rose-100/80 border border-rose-200 px-3 py-1.5 rounded-xl shadow-sm text-right"><div class="text-[9px] uppercase tracking-wider opacity-80 mb-0.5">Terlambat</div>Tempo: ${formatDateToID(inst.dueDate)}</div>`;
+                } else {
+                    borderClass = 'border-slate-100 bg-white hover:border-indigo-100';
+                    textClass = 'text-slate-600';
+                    icon = icons.circle;
+                    statusHTML = `<div class="ml-4 text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-xl shadow-sm text-right"><div class="text-[9px] uppercase tracking-wider opacity-80 mb-0.5">Jatuh Tempo</div>${formatDateToID(inst.dueDate)}</div>`;
+                }
+
+                const cursorClass = isAdmin ? 'cursor-pointer hover:-translate-y-0.5' : 'cursor-default';
+                const clickHandler = isAdmin ? `onclick="window.toggleInstallment('${credit.id}', '${inst.id}', ${isPaid})"` : '';
+
+                return `
+                    <div class="flex flex-col p-4 rounded-2xl shadow-sm border transition-all duration-300 mb-3 mx-4 ${borderClass} ${cursorClass}" ${clickHandler}>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center flex-1 select-none">
+                                ${icon}
+                                <div>
+                                    <p class="font-extrabold text-[15px] ${textClass}">Bulan ${index + 1}</p>
+                                    <p class="text-sm font-medium text-slate-500 mt-0.5">${inst.monthName}</p>
+                                </div>
+                            </div>
+                            ${statusHTML}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="min-h-screen bg-slate-50 pb-12 relative">
+                    <div class="bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 px-6 pt-8 pb-10 text-white rounded-b-[2.5rem] shadow-xl shadow-indigo-200/50 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full blur-3xl translate-x-1/2 -translate-y-1/2"></div>
+                        <div class="absolute bottom-0 left-0 w-40 h-40 bg-purple-400 opacity-20 rounded-full blur-2xl -translate-x-1/2 translate-y-1/2"></div>
+                        <div class="flex items-center justify-between mb-8 relative z-10">
+                            <button onclick="window.goBack()" class="p-2.5 hover:bg-white/20 rounded-2xl transition-all bg-white/10 backdrop-blur-md border border-white/10">${icons.arrowLeft}</button>
+                            <h2 class="font-bold text-sm tracking-widest text-indigo-100 uppercase">Detail Cicilan</h2>
+                            ${isAdmin ? `
+                                <div class="flex space-x-2">
+                                    <button onclick="window.openEditForm()" class="p-2.5 hover:bg-white/20 rounded-2xl transition-all bg-white/10 backdrop-blur-md border border-white/10" title="Edit">${icons.edit}</button>
+                                    <button onclick="window.confirmDelete('${credit.id}')" class="p-2.5 hover:bg-rose-500/80 rounded-2xl transition-all bg-white/10 backdrop-blur-md border border-white/10" title="Hapus">${icons.trash}</button>
+                                </div>
+                            ` : `<div class="w-[44px]"></div>`}
+                        </div>
+                        <div class="relative z-10 mt-2">
+                            <h1 class="text-3xl font-black mb-2 leading-tight">${credit.itemName}</h1>
+                            <div class="flex items-center text-indigo-100 mb-6 bg-white/10 inline-flex px-3 py-1.5 rounded-xl backdrop-blur-sm border border-white/10">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                <span class="text-sm font-bold tracking-wide">${credit.personName}</span>
+                            </div>
+                            <div class="bg-white/10 rounded-[1.5rem] p-5 backdrop-blur-md border border-white/20 shadow-inner">
+                                <div class="flex justify-between items-center mb-3">
+                                    <span class="text-indigo-100 font-medium text-sm">Tagihan per Bulan</span>
+                                    <span class="font-black text-2xl tracking-tight">${formatRupiah(credit.amount)}</span>
+                                </div>
+                                <div class="w-full bg-black/20 rounded-full h-1.5 mb-3 overflow-hidden">
+                                    <div class="bg-emerald-400 h-full rounded-full transition-all duration-700" style="width: ${(paidCount / credit.totalMonths) * 100}%"></div>
+                                </div>
+                                <div class="flex justify-between items-center text-xs font-bold text-indigo-100 uppercase tracking-wider">
+                                    <span>Progress Lunas</span>
+                                    <span class="text-white">${paidCount} dari ${credit.totalMonths} Bulan</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="pt-8">
+                        <div class="flex justify-between items-end mb-5 px-6">
+                            <h3 class="font-extrabold text-slate-800 text-xl">Daftar Setoran</h3>
+                            ${!isAdmin ? `<span class="text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-100 px-2 py-1 rounded-lg">Mode Lihat</span>` : `<span class="text-[10px] text-indigo-600 font-black uppercase tracking-wider bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 shadow-sm animate-pulse">Ketuk untuk ubah status</span>`}
+                        </div>
+                        <div class="space-y-1">${installmentsHTML}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- STREAMING_CHUNK: Komponen Form Tambah & Edit ---
+        function renderAddForm() {
+            const currentMonth = new Date().getMonth();
+            const currentYear = new Date().getFullYear();
+            const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            const monthOptions = monthNames.map((m, i) => `<option value="${i}" ${i === currentMonth ? 'selected' : ''}>${m}</option>`).join('');
+
+            return `
+                <div class="min-h-screen bg-slate-50">
+                    <div class="flex items-center px-6 py-6 border-b border-slate-200 bg-white sticky top-0 z-10 shadow-sm">
+                        <button onclick="window.goBack()" class="p-2.5 -ml-2 text-slate-600 hover:bg-slate-100 rounded-2xl bg-slate-50 shadow-sm border border-slate-200 transition-colors">${icons.arrowLeft}</button>
+                        <h2 class="font-extrabold text-xl ml-4 text-slate-800">Tambah Catatan Baru</h2>
+                    </div>
+                    <form onsubmit="window.submitAddForm(event)" class="p-6 space-y-6">
+                        <div id="error-msg" class="hidden bg-rose-50 text-rose-600 p-4 rounded-2xl text-sm mb-2 border border-rose-100 font-bold shadow-sm"></div>
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-5">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Nama Barang / Cicilan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">${icons.creditCard}</div>
+                                    <input type="text" name="itemName" placeholder="Contoh: Kulkas 2 Pintu" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800" />
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Nama Pelanggan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">${icons.userLarge}</div>
+                                    <input type="text" name="personName" placeholder="Contoh: Ang Yun" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800" />
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Buat PIN Pelanggan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                    </div>
+                                    <input type="text" name="userPin" placeholder="Contoh: 1234" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800 tracking-widest" />
+                                </div>
+                                <p class="text-xs font-semibold text-slate-400 mt-2 ml-1">*Digunakan pelanggan untuk masuk (kosongkan untuk PIN acak)</p>
+                            </div>
+                        </div>
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-5">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Jumlah per Bulan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><span class="text-slate-400 font-black">Rp</span></div>
+                                    <input type="number" name="amount" placeholder="290000" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all bg-slate-50 focus:bg-white font-bold text-slate-800" />
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Lama Cicilan (Bulan)</label>
+                                <div class="flex items-center">
+                                    <input type="number" name="totalMonths" placeholder="6" class="w-full border-2 border-r-0 border-slate-200 rounded-l-2xl p-3.5 focus:border-indigo-500 outline-none transition-all text-center bg-slate-50 focus:bg-white font-bold text-slate-800 relative z-10" />
+                                    <span class="bg-slate-100 border-2 border-l-0 border-slate-200 px-5 py-3.5 rounded-r-2xl text-slate-500 text-sm font-black uppercase tracking-wider relative z-0">Bulan</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Tgl Jatuh Tempo</label>
+                                <div class="flex items-center">
+                                    <span class="bg-slate-100 border-2 border-r-0 border-slate-200 px-5 py-3.5 rounded-l-2xl text-slate-500 text-sm font-black uppercase tracking-wider relative z-0">Tgl</span>
+                                    <input type="number" name="dueDay" min="1" max="31" value="25" class="w-full border-2 border-slate-200 rounded-r-2xl p-3.5 focus:border-indigo-500 outline-none transition-all text-center bg-slate-50 focus:bg-white font-bold text-slate-800 relative z-10" />
+                                </div>
+                            </div>
+                            <div class="pt-2 border-t border-slate-100 mt-5">
+                                <label class="block text-sm font-bold text-slate-700 mb-3 mt-4">Mulai Cicilan</label>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <select name="startMonth" class="border-2 border-slate-200 rounded-2xl p-3.5 bg-slate-50 focus:bg-white outline-none focus:border-indigo-500 transition-all font-bold text-slate-700 cursor-pointer">${monthOptions}</select>
+                                    <input type="number" name="startYear" value="${currentYear}" class="border-2 border-slate-200 rounded-2xl p-3.5 bg-slate-50 focus:bg-white outline-none focus:border-indigo-500 transition-all font-bold text-slate-700 text-center" />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="pt-2 pb-2">
+                            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold py-4 rounded-2xl hover:from-indigo-700 hover:to-purple-700 active:scale-[0.98] transition-all flex justify-center items-center shadow-lg shadow-indigo-200 text-lg tracking-wide">
+                                ${icons.save} Simpan Catatan Baru
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function renderEditForm() {
+            const credit = state.credits.find(c => c.id === state.selectedId);
+            if (!credit) return '';
+            return `
+                <div class="min-h-screen bg-slate-50">
+                    <div class="flex items-center px-6 py-6 border-b border-slate-200 bg-white sticky top-0 z-10 shadow-sm">
+                        <button onclick="window.openDetail('${credit.id}')" class="p-2.5 -ml-2 text-slate-600 hover:bg-slate-100 rounded-2xl bg-slate-50 shadow-sm border border-slate-200 transition-colors">${icons.arrowLeft}</button>
+                        <h2 class="font-extrabold text-xl ml-4 text-slate-800">Edit Catatan</h2>
+                    </div>
+                    <form onsubmit="window.submitEditForm(event)" class="p-6 space-y-6">
+                        <div id="edit-error-msg" class="hidden bg-rose-50 text-rose-600 p-4 rounded-2xl text-sm mb-2 border border-rose-100 font-bold shadow-sm"></div>
+                        <div class="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 mb-2">
+                            <p class="text-xs font-semibold text-indigo-700 flex items-start">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                Lama bulan dan tanggal tagihan tetap untuk menjaga histori cicilan.
+                            </p>
+                        </div>
+                        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-5">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Nama Barang</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">${icons.creditCard}</div>
+                                    <input type="text" name="itemName" value="${credit.itemName}" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800" />
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Nama Pelanggan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">${icons.userLarge}</div>
+                                    <input type="text" name="personName" value="${credit.personName}" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800" />
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">PIN Pelanggan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                    </div>
+                                    <input type="text" name="userPin" value="${credit.userPin}" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 outline-none transition-all bg-slate-50 focus:bg-white font-medium text-slate-800 tracking-widest" />
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2">Jumlah per Bulan</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><span class="text-slate-400 font-black">Rp</span></div>
+                                    <input type="number" name="amount" value="${credit.amount}" class="pl-12 w-full border-2 border-slate-200 rounded-2xl p-3.5 focus:border-indigo-500 outline-none transition-all bg-slate-50 focus:bg-white font-bold text-slate-800" />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="pt-2 pb-2">
+                            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold py-4 rounded-2xl hover:from-indigo-700 active:scale-[0.98] transition-all flex justify-center items-center shadow-lg shadow-indigo-200 text-lg tracking-wide">
+                                ${icons.save} Simpan Perubahan
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        // --- Eksekusi Awal ---
+        render(); // Tampilkan layar loading awal
+        initApp(); // Hubungkan ke Firebase
+    </script>
+</body>
+</html>
